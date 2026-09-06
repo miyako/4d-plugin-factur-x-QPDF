@@ -77,12 +77,15 @@ jobs:
         shell: bash
         run: |
           bin=facturx/facturx-test/Plugins/facturx.bundle/Contents/MacOS/facturx
-          # nm's output is captured once: piping it straight into `grep -q`
-          # makes grep exit early and kills nm with SIGPIPE, which -o pipefail
-          # then reports as a failure.
+          # Matched in-shell rather than through `grep -q`: grep exits as
+          # soon as it matches, and the resulting SIGPIPE on the writing end
+          # of the pipe is turned into a step failure by -o pipefail.
           symbols=$(nm -g "$bin")
           for symbol in _FourDPackex _PluginMain _gCall4D; do
-            echo "$symbols" | grep -q "$symbol" || { echo "missing $symbol" >&2; exit 1; }
+            case $symbols in
+              *"$symbol"*) ;;
+              *) echo "missing $symbol" >&2; exit 1 ;;
+            esac
           done
           otool -L "$bin"
 
