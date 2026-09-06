@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE base SYSTEM "http://www.4d.com/dtd/2007/base.dtd" >
+<base name="facturx" uuid="C9B7459A2CD249B1B7A7FD238A6053C0" collation_locale="en-gb">
+	<schema name="DEFAULT_SCHEMA"/>
+	<base_extra>
+		<journal_file journal_file_enabled="false"/>
+	</base_extra>
+</base>

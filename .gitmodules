@@ -1,3 +1,13 @@
 [submodule "4D-Plugin-SDK"]
 	path = 4D-Plugin-SDK
 	url = https://github.com/4d/4D-Plugin-SDK.git
+[submodule "qpdf"]
+	path = qpdf
+	url = https://github.com/qpdf/qpdf.git
+	branch = main
+[submodule "zlib"]
+	path = zlib
+	url = https://github.com/madler/zlib.git
+[submodule "libjpeg-turbo"]
+	path = libjpeg-turbo
+	url = https://github.com/libjpeg-turbo/libjpeg-turbo.git

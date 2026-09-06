@@ -1,0 +1,12 @@
+{
+	"Tests": {
+		"methods": [
+			"test_all",
+			"test_facturx_embed",
+			"test_facturx_errors",
+			"test_facturx_inplace",
+			"test_facturx_conformance"
+		]
+	},
+	"trash": {}
+}

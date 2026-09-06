@@ -1,0 +1,122 @@
+name: Build and Test
+
+on:
+  push:
+    branches:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+            tool4d_archive: tool4d_arm64.tar.xz
+          - os: windows-latest
+            platform: win
+            tool4d_archive: tool4d_win.tar.xz
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Parse 4D version from .4DProject
+        id: version
+        shell: bash
+        run: |
+          compat=$(python3 -c "
+          import json
+          with open('facturx/facturx-test/Project/facturx.4DProject') as f:
+              print(json.load(f)['compatibilityVersion'])
+          ")
+          major=${compat:0:2}
+          minor_raw=${compat:2:2}
+          minor_dec=$((10#$minor_raw))
+          if [ $minor_dec -lt 10 ]; then
+            version="${major}.${minor_dec}"
+          else
+            version="${major} R$((minor_dec / 10))"
+          fi
+          echo "branch=${major}.x" >> "$GITHUB_OUTPUT"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Download tool4d
+        shell: bash
+        run: |
+          url="https://resources-download.4d.com/release/${{ steps.version.outputs.branch }}/${{ steps.version.outputs.version }}/latest/${{ matrix.platform }}/${{ matrix.tool4d_archive }}"
+          curl "${url}" -o tool4d.tar.xz -sL
+          tar xJf tool4d.tar.xz
+
+      - name: Build plugin (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          cd facturx
+          cmake -S . -B cmake-build -DCMAKE_BUILD_TYPE=Release
+          cmake --build cmake-build --parallel
+
+      - name: Build plugin (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cd facturx
+          cmake -S . -B cmake-build -A x64
+          cmake --build cmake-build --config Release --parallel
+
+      - name: Verify exported symbols (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          bin=facturx/facturx-test/Plugins/facturx.bundle/Contents/MacOS/facturx
+          # Matched in-shell rather than through `grep -q`: grep exits as
+          # soon as it matches, and the resulting SIGPIPE on the writing end
+          # of the pipe is turned into a step failure by -o pipefail.
+          symbols=$(nm -g "$bin")
+          for symbol in _FourDPackex _PluginMain _gCall4D; do
+            case $symbols in
+              *"$symbol"*) ;;
+              *) echo "missing $symbol" >&2; exit 1 ;;
+            esac
+          done
+          otool -L "$bin"
+
+      - name: Build the PDF/A-3 conformance fixture (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install --quiet ghostscript
+          ./facturx/make-pdfa3.sh
+
+      - name: Run tests (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          tool4d.app/Contents/MacOS/tool4d \
+            --dataless \
+            --startup-method=test_all \
+            --project="$(pwd)/facturx/facturx-test/Project/facturx.4DProject" | tee out.log
+          grep -q PASS out.log
+
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $project = "$((Get-Location).Path)\facturx\facturx-test\Project\facturx.4DProject"
+          ./tool4d/tool4d.exe --dataless --startup-method=test_all --project="$project" | Tee-Object -FilePath out.log
+          if (-not (Select-String -Path out.log -Pattern 'PASS' -Quiet)) { exit 1 }
+
+      - name: Validate the produced document with veraPDF (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          brew install --quiet verapdf
+          verapdf --flavour 3b --format text facturx/facturx-test/conformance-out.pdf
