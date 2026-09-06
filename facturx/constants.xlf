@@ -1,0 +1,130 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<xliff version="1.0" xmlns:d4="http://www.4d.com/d4-ns">
+<header>
+    <note>facturx</note>
+</header>
+<group resname="themes">
+    <trans-unit id="facturx" resname="facturx" translate="no">
+        <source>Factur-X</source>
+    </trans-unit>
+</group>
+<group restype="x-4DK#" d4:groupName="facturx">
+    <trans-unit d4:value="0" id="1">
+        <source>facturx ok</source>
+    </trans-unit>
+    <trans-unit d4:value="100" id="2">
+        <source>facturx error bad arity</source>
+    </trans-unit>
+    <trans-unit d4:value="101" id="3">
+        <source>facturx error input path empty</source>
+    </trans-unit>
+    <trans-unit d4:value="102" id="4">
+        <source>facturx error input pdf unreadable</source>
+    </trans-unit>
+    <trans-unit d4:value="103" id="5">
+        <source>facturx error xmlinfo not object</source>
+    </trans-unit>
+    <trans-unit d4:value="104" id="6">
+        <source>facturx error xml path missing</source>
+    </trans-unit>
+    <trans-unit d4:value="105" id="7">
+        <source>facturx error xml unreadable</source>
+    </trans-unit>
+    <trans-unit d4:value="106" id="8">
+        <source>facturx error xml empty</source>
+    </trans-unit>
+    <trans-unit d4:value="107" id="9">
+        <source>facturx error xml not utf8</source>
+    </trans-unit>
+    <trans-unit d4:value="108" id="10">
+        <source>facturx error xml name invalid</source>
+    </trans-unit>
+    <trans-unit d4:value="109" id="11">
+        <source>facturx error xml relationship invalid</source>
+    </trans-unit>
+    <trans-unit d4:value="110" id="12">
+        <source>facturx error xml document type invalid</source>
+    </trans-unit>
+    <trans-unit d4:value="111" id="13">
+        <source>facturx error xml version missing</source>
+    </trans-unit>
+    <trans-unit d4:value="112" id="14">
+        <source>facturx error xml conformance missing</source>
+    </trans-unit>
+    <trans-unit d4:value="113" id="15">
+        <source>facturx error output path empty</source>
+    </trans-unit>
+    <trans-unit d4:value="114" id="16">
+        <source>facturx error attachments not collection</source>
+    </trans-unit>
+    <trans-unit d4:value="115" id="17">
+        <source>facturx error attachment not object</source>
+    </trans-unit>
+    <trans-unit d4:value="116" id="18">
+        <source>facturx error attachment unreadable</source>
+    </trans-unit>
+    <trans-unit d4:value="117" id="19">
+        <source>facturx error attachment name invalid</source>
+    </trans-unit>
+    <trans-unit d4:value="118" id="20">
+        <source>facturx error attachment name duplicate</source>
+    </trans-unit>
+    <trans-unit d4:value="119" id="21">
+        <source>facturx error attachment type invalid</source>
+    </trans-unit>
+    <trans-unit d4:value="120" id="22">
+        <source>facturx error attachment relationship invalid</source>
+    </trans-unit>
+    <trans-unit d4:value="121" id="23">
+        <source>facturx error options not object</source>
+    </trans-unit>
+    <trans-unit d4:value="122" id="24">
+        <source>facturx error property wrong type</source>
+    </trans-unit>
+    <trans-unit d4:value="201" id="25">
+        <source>facturx error pdf parse failed</source>
+    </trans-unit>
+    <trans-unit d4:value="202" id="26">
+        <source>facturx error pdf encrypted</source>
+    </trans-unit>
+    <trans-unit d4:value="203" id="27">
+        <source>facturx error pdf already facturx</source>
+    </trans-unit>
+    <trans-unit d4:value="204" id="28">
+        <source>facturx error pdf no xmp</source>
+    </trans-unit>
+    <trans-unit d4:value="205" id="29">
+        <source>facturx error pdf version too old</source>
+    </trans-unit>
+    <trans-unit d4:value="206" id="30">
+        <source>facturx error pdf name collision</source>
+    </trans-unit>
+    <trans-unit d4:value="207" id="31">
+        <source>facturx error pdf not pdfa3</source>
+    </trans-unit>
+    <trans-unit d4:value="301" id="32">
+        <source>facturx error output exists</source>
+    </trans-unit>
+    <trans-unit d4:value="302" id="33">
+        <source>facturx error output dir unwritable</source>
+    </trans-unit>
+    <trans-unit d4:value="303" id="34">
+        <source>facturx error output temp failed</source>
+    </trans-unit>
+    <trans-unit d4:value="304" id="35">
+        <source>facturx error output rename failed</source>
+    </trans-unit>
+    <trans-unit d4:value="305" id="36">
+        <source>facturx error output inplace no overwrite</source>
+    </trans-unit>
+    <trans-unit d4:value="401" id="37">
+        <source>facturx error backend</source>
+    </trans-unit>
+    <trans-unit d4:value="402" id="38">
+        <source>facturx error unexpected exception</source>
+    </trans-unit>
+    <trans-unit d4:value="403" id="39">
+        <source>facturx error unknown fatal</source>
+    </trans-unit>
+</group>
+</xliff>

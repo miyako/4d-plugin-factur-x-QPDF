@@ -1,0 +1,25 @@
+{
+	"bars": [
+		{
+			"id": 1,
+			"name": "Menu Bar",
+			"items": [
+				{"link": 32001}
+			]
+		}
+	],
+	"menus": [
+		{
+			"link": 32001,
+			"title": ":xliff:CommonMenuFile",
+			"items": [
+				{
+					"title": ":xliff:CommonMenuItemQuit",
+					"shortcutAccel": true,
+					"shortcutKey": "Q",
+					"action": "quit"
+				}
+			]
+		}
+	]
+}

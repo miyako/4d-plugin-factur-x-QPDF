@@ -1,0 +1,11 @@
+{
+    "name": "facturx",
+    "id": 32100,
+    "commands": [
+        {
+            "theme": "PDFA",
+            "syntax": "PDFA Embed FacturX(&T;&J;&T;&C;&J):J",
+            "threadSafe": true
+        }
+    ]
+}
