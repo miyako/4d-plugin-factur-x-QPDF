@@ -280,14 +280,21 @@ staple validation must all succeed. The helper rechecks availability immediately
 before publication, pushes a non-forced `vX.Y.Z` tag at that exact SHA, verifies
 the remote target, and creates a new release with the ZIP and DMG.
 
-Existing tags, releases, and assets are never overwritten. Only an explicit
-release API 404 is treated as absence; authentication, network, and API errors
-stop the run. The current `v1.0.3` tag already exists, so run Bump version before
-publishing another version. The native/4D/veraPDF CI remains separate and still
+Existing tags, releases (including drafts), and assets are never overwritten.
+An authenticated, paginated releases listing must succeed and contain no
+matching tag; authentication, network, API errors (including listing 404s), and
+malformed responses stop the run. The current `v1.0.3` tag already exists, so run
+Bump version before publishing another version. The native/4D/veraPDF CI remains separate and still
 runs automatically on branch pushes and PRs; Build does not dispatch that CI.
 
 Tag push and release creation are **not atomic**. If creation or asset upload
 fails after the tag push, the tag (and possibly a partial release) remains.
+Creation is a create-only REST `POST /releases` with the exact tag and SHA,
+`draft=false`, `prerelease=false`, and generated release notes, followed by
+`gh release upload` without `--clobber`. It deliberately avoids
+`gh release create` with assets, which can automatically delete its temporary
+draft on failure.
+The new release is public before asset uploads complete.
 Inspect it manually; retries refuse it instead of deleting, retagging, or
 replacing assets. A failed build, verification, signing, notarization, or staple
 step creates no tag or release.

@@ -1,5 +1,6 @@
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
 import plistlib
@@ -152,20 +153,47 @@ class VersionTests(Fixture):
 
 
 class AvailabilityTests(Fixture):
-    def check_remote(self, code=2, error=None):
+    def check_remote(self, code=2, error=None, pages=None):
         result = subprocess.CompletedProcess([], code, "", "remote failed")
+        responses = [io.BytesIO(json.dumps(page).encode()) for page in (pages or [[]])]
         return patch.object(release.subprocess, "run", return_value=result), \
-            patch.object(release, "urlopen", side_effect=error)
+            patch.object(release, "urlopen", side_effect=error or responses)
 
-    def test_only_explicit_release_404_is_absence(self):
-        error = HTTPError("https://api.github.test", 404, "Not Found", {}, None)
-        run, urlopen = self.check_remote(error=error)
+    def test_successful_authenticated_empty_listing_is_absence(self):
+        run, urlopen = self.check_remote()
         with run as git, urlopen as api:
             release.ensure_available("v2.3.4")
         self.assertEqual(git.call_args.args[0][-1], "refs/tags/v2.3.4")
         request = api.call_args.args[0]
-        self.assertTrue(request.full_url.endswith("/repos/owner/repo/releases/tags/v2.3.4"))
+        self.assertTrue(request.full_url.endswith("/repos/owner/repo/releases?per_page=100&page=1"))
+        self.assertEqual(request.get_header("Authorization"), "Bearer fixture-token")
+        self.assertEqual(request.get_method(), "GET")
         self.assertEqual(api.call_args.kwargs["timeout"], 30)
+
+    def test_pagination_checks_later_drafts_and_published_releases(self):
+        first = [{"tag_name": f"v0.0.{i}", "draft": False} for i in range(100)]
+        for draft in (True, False):
+            run, urlopen = self.check_remote(pages=[first, [{"tag_name": "v2.3.4", "draft": draft}]])
+            with self.subTest(draft=draft), run, urlopen as api, \
+                    self.assertRaisesRegex(ValueError, "refusing to replace"):
+                release.ensure_available("v2.3.4")
+            self.assertEqual(api.call_count, 2)
+            self.assertTrue(api.call_args.args[0].full_url.endswith("page=2"))
+
+    def test_full_page_requires_successful_next_page_before_absence(self):
+        first = [{"tag_name": f"v0.0.{i}", "draft": True} for i in range(100)]
+        run, urlopen = self.check_remote(pages=[first, []])
+        with run, urlopen as api:
+            release.ensure_available("v2.3.4")
+        self.assertEqual(api.call_count, 2)
+        run, urlopen = self.check_remote()
+        with run, urlopen as api:
+            api.side_effect = [
+                io.BytesIO(json.dumps(first).encode()),
+                HTTPError("https://api.github.test", 500, "failure", {}, None),
+            ]
+            with self.assertRaises(HTTPError):
+                release.ensure_available("v2.3.4")
 
     def test_existing_tag_blocks_without_api(self):
         run, urlopen = self.check_remote(code=0)
@@ -181,24 +209,53 @@ class AvailabilityTests(Fixture):
             api.assert_not_called()
 
     def test_existing_release_blocks(self):
-        run, urlopen = self.check_remote()
-        with run, urlopen, self.assertRaisesRegex(ValueError, "refusing to replace"):
-            release.ensure_available("v2.3.4")
+        for draft in (True, False):
+            run, urlopen = self.check_remote(pages=[[{"tag_name": "v2.3.4", "draft": draft}]])
+            with self.subTest(draft=draft), run, urlopen, \
+                    self.assertRaisesRegex(ValueError, "refusing to replace"):
+                release.ensure_available("v2.3.4")
 
     def test_api_errors_are_not_absence(self):
         errors = [HTTPError("https://api.github.test", code, "failure", {}, None)
-                  for code in (401, 403, 429, 500)]
+                  for code in (401, 403, 404, 429, 500)]
         errors += [URLError("offline"), TimeoutError("timeout")]
         for error in errors:
             run, urlopen = self.check_remote(error=error)
             with self.subTest(error=error), run, urlopen, self.assertRaises(type(error)):
                 release.ensure_available("v2.3.4")
 
+    def test_malformed_listing_fails_closed(self):
+        for page in ({}, None, [None], [{"tag_name": "v1.2.3"}],
+                     [{"tag_name": 123, "draft": False}], [{"tag_name": "v1.2.3", "draft": "false"}]):
+            run, urlopen = self.check_remote(pages=[page])
+            with self.subTest(page=page), run, urlopen, self.assertRaises(ValueError):
+                release.ensure_available("v2.3.4")
+        run, urlopen = self.check_remote()
+        with run, urlopen as api:
+            api.side_effect = [io.BytesIO(b"invalid JSON")]
+            with self.assertRaises(ValueError):
+                release.ensure_available("v2.3.4")
+
+    def test_create_api_is_json_post(self):
+        payload = {
+            "tag_name": "v2.3.4", "target_commitish": SHA, "name": "v2.3.4",
+            "draft": False, "prerelease": False, "generate_release_notes": True,
+        }
+        with patch.object(release, "urlopen", return_value=io.BytesIO(b'{"id": 123}')) as api:
+            self.assertEqual(release.release_api("releases", payload), {"id": 123})
+        request = api.call_args.args[0]
+        self.assertTrue(request.full_url.endswith("/repos/owner/repo/releases"))
+        self.assertEqual(request.get_method(), "POST")
+        self.assertEqual(json.loads(request.data), payload)
+        self.assertEqual(request.get_header("Authorization"), "Bearer fixture-token")
+        self.assertEqual(request.get_header("Content-type"), "application/json")
+
 
 class PublicationTests(Fixture):
     def setUp(self):
         super().setUp()
         self.assets = ["facturx-2.3.4.zip", "facturx-2.3.4.dmg"]
+        self.created = {"id": 123, "tag_name": "v2.3.4", "draft": False, "prerelease": False}
         for asset in self.assets:
             Path(asset).write_bytes(b"fixture")
 
@@ -214,17 +271,26 @@ class PublicationTests(Fixture):
 
     def test_exact_tag_target_and_publication_order(self):
         calls = []
+
+        def create(path, payload):
+            calls.append(["POST", path, payload])
+            return self.created
+
         with patch.object(release, "check_commit", return_value=SHA), \
                 patch.object(release, "ensure_available", side_effect=lambda tag: calls.append(["available", tag])), \
                 patch.object(release.subprocess, "run", side_effect=lambda args, **kw: calls.append(args)), \
+                patch.object(release, "release_api", side_effect=create), \
                 patch.object(release.subprocess, "check_output", return_value=f"{SHA}\trefs/tags/v2.3.4\n"):
             release.publish(FIXTURE_VERSION, self.assets)
         self.assertEqual(calls, [
             ["available", "v2.3.4"],
             ["git", "tag", "v2.3.4", SHA],
             ["git", "-c", "push.followTags=false", "push", "origin", "refs/tags/v2.3.4:refs/tags/v2.3.4"],
-            ["gh", "release", "create", "v2.3.4", "--verify-tag", "--target", SHA,
-             "--title", "v2.3.4", "--generate-notes", *self.assets],
+            ["POST", "releases", {
+                "tag_name": "v2.3.4", "target_commitish": SHA, "name": "v2.3.4",
+                "draft": False, "prerelease": False, "generate_release_notes": True,
+            }],
+            ["gh", "release", "upload", "v2.3.4", *self.assets],
         ])
 
     def test_no_publication_for_wrong_version_or_assets(self):
@@ -262,11 +328,46 @@ class PublicationTests(Fixture):
                     patch.object(release, "check_commit", return_value=SHA), \
                     patch.object(release, "ensure_available"), \
                     patch.object(release.subprocess, "run", side_effect=execute), \
+                    patch.object(release, "release_api", return_value=self.created) as api, \
                     patch.object(release.subprocess, "check_output", return_value=f"{SHA}\trefs/tags/v2.3.4"), \
                     self.assertRaises(subprocess.CalledProcessError):
                 release.publish(FIXTURE_VERSION, self.assets)
             self.assertEqual(len(calls), failed_call)
             self.assertFalse(any("--force" in c or "--clobber" in c or "delete" in c for c in calls))
+            self.assertEqual(api.call_count, int(failed_call == 3))
+
+    def test_post_failure_leaves_pushed_tag_without_upload_or_cleanup(self):
+        for error in (
+            HTTPError("https://api.github.test", 422, "duplicate", {}, None),
+            HTTPError("https://api.github.test", 500, "failure", {}, None),
+            URLError("response lost after server creation"),
+        ):
+            with self.subTest(error=error), \
+                    patch.object(release, "check_commit", return_value=SHA), \
+                    patch.object(release, "ensure_available"), \
+                    patch.object(release.subprocess, "run") as run, \
+                    patch.object(release.subprocess, "check_output", return_value=f"{SHA}\trefs/tags/v2.3.4"), \
+                    patch.object(release, "release_api", side_effect=error) as api, \
+                    self.assertRaises(type(error)):
+                release.publish(FIXTURE_VERSION, self.assets)
+            self.assertEqual(run.call_count, 2)
+            self.assertTrue(all(call.args[0][0] == "git" for call in run.call_args_list))
+            self.assertEqual(api.call_count, 1)
+            self.assertEqual(api.call_args.args[0], "releases")
+
+    def test_unexpected_post_response_stops_without_cleanup(self):
+        for response in ({}, [], {**self.created, "draft": True},
+                         {**self.created, "tag_name": "v2.3.5"}, {**self.created, "id": True}):
+            with self.subTest(response=response), \
+                    patch.object(release, "check_commit", return_value=SHA), \
+                    patch.object(release, "ensure_available"), \
+                    patch.object(release.subprocess, "run") as run, \
+                    patch.object(release.subprocess, "check_output", return_value=f"{SHA}\trefs/tags/v2.3.4"), \
+                    patch.object(release, "release_api", return_value=response) as api, \
+                    self.assertRaisesRegex(ValueError, "inspect publication state"):
+                release.publish(FIXTURE_VERSION, self.assets)
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(api.call_count, 1)
 
     def test_wrong_remote_tag_target_blocks_release(self):
         with patch.object(release, "check_commit", return_value=SHA), \

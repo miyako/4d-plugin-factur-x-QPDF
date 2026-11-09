@@ -1,13 +1,13 @@
 """Coordinated version metadata and fail-closed release publication."""
 
 import argparse
+import json
 import os
 from pathlib import Path
 import plistlib
 import re
 import subprocess
 import sys
-from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 
@@ -92,6 +92,22 @@ def check_commit():
     return sha
 
 
+def release_api(path, payload=None):
+    request = Request(
+        f"{os.environ['GITHUB_API_URL']}/repos/{os.environ['GITHUB_REPOSITORY']}/{path}",
+        data=None if payload is None else json.dumps(payload).encode("utf-8"),
+        method="GET" if payload is None else "POST",
+        headers={
+            "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
+            "Accept": "application/vnd.github+json",
+            "Content-Type": "application/json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urlopen(request, timeout=30) as response:
+        return json.load(response)
+
+
 def ensure_available(tag):
     result = subprocess.run(
         ["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"],
@@ -101,22 +117,21 @@ def ensure_available(tag):
         raise ValueError(f"Tag {tag} already exists; bump the version before building")
     if result.returncode != 2:
         raise RuntimeError(f"Cannot check remote tags: {result.stderr}")
-    request = Request(
-        f"{os.environ['GITHUB_API_URL']}/repos/{os.environ['GITHUB_REPOSITORY']}/releases/tags/{tag}",
-        headers={
-            "Authorization": f"Bearer {os.environ['GH_TOKEN']}",
-            "Accept": "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    try:
-        with urlopen(request, timeout=30):
-            pass
-    except HTTPError as error:
-        if error.code == 404:
+    # Listing with authentication includes drafts, unlike the tag lookup.
+    page = 1
+    while True:
+        releases = release_api(f"releases?per_page=100&page={page}")
+        if not isinstance(releases, list) or len(releases) > 100:
+            raise ValueError("Invalid releases listing response")
+        for item in releases:
+            if (not isinstance(item, dict) or not isinstance(item.get("tag_name"), str)
+                    or not isinstance(item.get("draft"), bool)):
+                raise ValueError("Invalid release in listing response")
+            if item["tag_name"] == tag:
+                raise ValueError(f"Release {tag} already exists (including drafts); refusing to replace it or its assets")
+        if len(releases) < 100:
             return
-        raise
-    raise ValueError(f"Release {tag} already exists; refusing to replace it or its assets")
+        page += 1
 
 
 def publish(version, assets):
@@ -138,10 +153,20 @@ def publish(version, assets):
     ).split()
     if remote != [sha, f"refs/tags/{tag}"]:
         raise ValueError("Published tag does not point to the selected commit")
-    subprocess.run([
-        "gh", "release", "create", tag, "--verify-tag", "--target", sha,
-        "--title", tag, "--generate-notes", *assets,
-    ], check=True)
+    created = release_api("releases", {
+        "tag_name": tag,
+        "target_commitish": sha,
+        "name": tag,
+        "draft": False,
+        "prerelease": False,
+        "generate_release_notes": True,
+    })
+    if (not isinstance(created, dict) or type(created.get("id")) is not int
+            or created["id"] <= 0 or created.get("tag_name") != tag
+            or created.get("draft") is not False or created.get("prerelease") is not False):
+        raise ValueError("Unexpected release creation response; inspect publication state manually")
+    # Separate upload avoids gh release create's automatic temporary-draft deletion.
+    subprocess.run(["gh", "release", "upload", tag, *assets], check=True)
 
 
 def main():

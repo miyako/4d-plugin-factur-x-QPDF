@@ -1039,18 +1039,25 @@ Use the maintained [Build workflow](../workflows/release.yml), which has only
 `workflow_dispatch` and zero inputs. Every release job checks out `github.sha`,
 validates the authoritative version, and rejects existing remote tags/releases.
 Publication is serialized across branches; no main-only restriction is imposed.
+Use authenticated, paginated release listings to reject same-tag drafts as well
+as published releases; a tag-specific release lookup does not cover drafts.
 
 Preserve Windows x64, static dependencies, Windows artifact checks, separate
 arm64/x86_64 builds for libjpeg-turbo, universal verification and bundle merging,
 bundle metadata validation, Developer ID signing, ZIP/DMG packaging, explicit
 notarization acceptance and DMG staple validation. Recheck availability directly
 before pushing a non-forced tag at the selected SHA and creating a new release.
-Only an explicit release API 404 means absence; all other remote/API failures
-stop the workflow. Never overwrite tags, releases or assets.
+Only a successful complete listing with no matching release means absence;
+all remote/API failures (including listing 404s) and malformed responses stop
+the workflow. Never overwrite tags, releases or assets.
 
 Tag push and release creation are not atomic. A failure after tag push may leave
-a tag or partial release requiring manual inspection. Do not automatically
-delete or overwrite it; retries must refuse existing publication state.
+a tag or partial release requiring manual inspection. Use a create-only REST
+POST with explicit tag, selected SHA, name, `draft=false`, `prerelease=false`,
+and generated notes, followed by `gh release upload` without `--clobber`.
+Do not use `gh release create` with assets, which can delete its temporary draft
+on failure. Do not automatically delete or overwrite publication state; retries
+must refuse it.
 See the [README](../../README.md#cicd) for version-source details, migration drift
 repair, and focused regression commands.
 
@@ -2017,7 +2024,7 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN
 
 **Verification:** Do NOT use `codesign --verify --deep --strict` on bundles containing third-party dylibs (e.g., Oracle, OpenSSL) or Windows binaries (`.4DX`, `.dll`). The verify traverses the full bundle tree and fails with "No such process" on non-standard structures — even when the signing itself succeeded. Notarytool validates the signature during submission, so a separate verify step is unnecessary.
 
-**Release artifacts:** Create both `.zip` (cross-platform bundle) and `.dmg` (mac-friendly, can be stapled). Require Accepted notarization for both and staple validation for the dmg. Recheck unused version, push a non-forced tag at the selected SHA, and create a new release with `gh release create --verify-tag --target SHA`. Never update existing releases or assets.
+**Release artifacts:** Create both `.zip` (cross-platform bundle) and `.dmg` (mac-friendly, can be stapled). Require Accepted notarization for both and staple validation for the dmg. Recheck unused version including draft releases, push a non-forced tag at the selected SHA, verify its remote target, then use a create-only REST POST for a published non-prerelease with generated notes. Upload with `gh release upload` without `--clobber`. Never update or automatically delete existing releases or assets.
 
 **Ad-hoc vs Developer ID:** Ad-hoc signatures (`codesign -fs -`) are only for local development builds. CI release builds must use Developer ID for notarization to succeed.
 
