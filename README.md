@@ -248,9 +248,56 @@ plugin.
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `test.yml` | Push / PR / manual | Build and test on macOS + Windows, validate with veraPDF |
-| `bump-version.yml` | Manual | Bump `VERSION`, commit, push a `v*.*.*` tag |
-| `release.yml` | `v*.*.*` tag | Build both platforms, sign, notarize, publish a release |
+| `test.yml` — Build and Test | Push / PR / manual | Workflow regressions, macOS + Windows builds and 4D tests, veraPDF validation |
+| `bump-version.yml` — Bump version | Manual, patch/minor/major | Commit coordinated version metadata to the selected branch only |
+| `release.yml` — Build | Manual, no inputs | Build the selected commit, verify, sign, notarize, then create a new tag and release |
+
+**Bump version** and **Build** are separate manual actions. Bump version creates
+no tag or release and starts no release build. It checks out the selected SHA,
+rejects tag selections, and pushes only the selected branch without force or
+follow-tags. Concurrent bumps on the same branch are serialized; a branch that
+has advanced since selection causes the push to fail rather than overwrite it.
+
+`VERSION` is the authoritative plain `X.Y.Z` version (no leading zeros).
+`facturx/Version.cmake` supplies it to both macOS bundle version fields through
+the existing `Info.plist.in` build-variable references. There is no independent
+build counter or Windows version resource. The migration keeps `VERSION` at
+`1.0.3` and repairs the hard-coded CMake `1.0` drift by deriving both fields;
+tracked prebuilt bundle metadata is not a version source and is not rewritten.
+The helper rejects drift, malformed metadata, and unrecognized references;
+bumps preserve recognized references and update corresponding literals, if any.
+Invoice XML `version` and the test project's 4D compatibility version are
+unrelated and unchanged.
+
+To publish, select a branch in GitHub's **Build** workflow UI and run it without
+any typed inputs. All release jobs check out the immutable `github.sha` selected
+at dispatch, validate its version, and reject existing remote tags or GitHub
+releases before building. Publication is serialized across branches, without a
+main-only restriction. The split arm64/x86_64 builds (required by libjpeg-turbo),
+Windows artifact merge, universal checks, built bundle version check, Developer
+ID signing, ZIP/DMG packaging, accepted notarization of both assets, and DMG
+staple validation must all succeed. The helper rechecks availability immediately
+before publication, pushes a non-forced `vX.Y.Z` tag at that exact SHA, verifies
+the remote target, and creates a new release with the ZIP and DMG.
+
+Existing tags, releases, and assets are never overwritten. Only an explicit
+release API 404 is treated as absence; authentication, network, and API errors
+stop the run. The current `v1.0.3` tag already exists, so run Bump version before
+publishing another version. The native/4D/veraPDF CI remains separate and still
+runs automatically on branch pushes and PRs; Build does not dispatch that CI.
+
+Tag push and release creation are **not atomic**. If creation or asset upload
+fails after the tag push, the tag (and possibly a partial release) remains.
+Inspect it manually; retries refuse it instead of deleting, retagging, or
+replacing assets. A failed build, verification, signing, notarization, or staple
+step creates no tag or release.
+
+Focused local checks (no native build, signing, or publication):
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+actionlint
+```
 
 ### Required secrets (`release.yml` only)
 

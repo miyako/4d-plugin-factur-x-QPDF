@@ -1,0 +1,5 @@
+file(READ "${CMAKE_CURRENT_LIST_DIR}/../VERSION" FACTURX_VERSION)
+if(NOT FACTURX_VERSION MATCHES "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(\n)?$")
+    message(FATAL_ERROR "VERSION must contain only X.Y.Z without leading zeros")
+endif()
+string(REGEX REPLACE "\n$" "" FACTURX_VERSION "${FACTURX_VERSION}")

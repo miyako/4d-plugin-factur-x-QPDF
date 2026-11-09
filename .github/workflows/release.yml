@@ -1,14 +1,7 @@
-name: Build & Release
+name: Build
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing tag to build (e.g. v1.0.0)
-        required: true
 
 permissions:
   contents: write
@@ -18,7 +11,7 @@ env:
   MACOS_DEPLOYMENT_TARGET: '10.15'
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-publication
   cancel-in-progress: false
 
 jobs:
@@ -29,11 +22,16 @@ jobs:
       tag: ${{ steps.set.outputs.tag }}
       version: ${{ steps.set.outputs.version }}
     steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
       - id: set
-        run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+        name: Validate selected commit, metadata and unused version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/release.py preflight
 
   build-windows:
     name: Build Windows (x64)
@@ -42,9 +40,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
+
+      - name: Validate selected commit, metadata and unused version
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/release.py preflight
 
       - name: build with CMake
         shell: pwsh
@@ -67,9 +71,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.version.outputs.tag }}
+          ref: ${{ github.sha }}
           submodules: recursive
           fetch-depth: 0
+
+      - name: Validate selected commit, metadata and unused version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/release.py preflight
 
       - name: download windows binaries
         uses: actions/download-artifact@v4
@@ -150,6 +159,9 @@ jobs:
           mkdir -p "$BUNDLE_PATH/Contents/Windows64"
           cp winbuild/facturx.4DX "$BUNDLE_PATH/Contents/Windows64/facturx.4DX"
 
+      - name: Verify built bundle version
+        run: python3 .github/scripts/release.py verify-bundle "$BUNDLE_PATH/Contents/Info.plist"
+
       - name: codesign
         run: |
           set -euo pipefail
@@ -169,18 +181,19 @@ jobs:
           ditto -c -k --keepParent "$BUNDLE_PATH" "$ZIP_PATH"
           hdiutil create -format UDBZ -volname "facturx" -srcfolder "$BUNDLE_PATH" "$DMG_PATH"
 
-          xcrun notarytool submit "$ZIP_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
-          xcrun notarytool submit "$DMG_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
+          xcrun notarytool submit "$ZIP_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait --output-format json > "$RUNNER_TEMP/notary-zip.json"
+          xcrun notarytool submit "$DMG_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait --output-format json > "$RUNNER_TEMP/notary-dmg.json"
+          python3 -c 'import json, sys; results = [json.load(open(p)) for p in sys.argv[1:]]; print(results); sys.exit(0 if all(r.get("status") == "Accepted" for r in results) else 1)' \
+            "$RUNNER_TEMP/notary-zip.json" "$RUNNER_TEMP/notary-dmg.json"
           xcrun stapler staple "$DMG_PATH"
+          xcrun stapler validate "$DMG_PATH"
 
           echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
           echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
 
-      - name: create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: ${{ needs.version.outputs.tag }}
-          files: |
-            ${{ env.ZIP_PATH }}
-            ${{ env.DMG_PATH }}
+      - name: Publish new tag and GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          python3 .github/scripts/release.py publish "$RELEASE_VERSION" "$ZIP_PATH" "$DMG_PATH"

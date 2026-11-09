@@ -8,6 +8,13 @@ on:
   workflow_dispatch:
 
 jobs:
+  workflow-regressions:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test release lifecycle safeguards
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts -p 'test_*.py'
+
   test:
     strategy:
       fail-fast: false
