@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.20)
 
 set(PLUGIN_NAME "facturx" CACHE STRING "Plugin name")
 
+include("${CMAKE_CURRENT_SOURCE_DIR}/Version.cmake")
+
 project(${PLUGIN_NAME} LANGUAGES C CXX)
 
 # Where the finished plugin lands. It defaults to the test project's Plugins
@@ -188,8 +190,8 @@ if(APPLE)
         BUNDLE_EXTENSION "bundle"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Info.plist.in"
         MACOSX_BUNDLE_GUI_IDENTIFIER "com.4d.${PLUGIN_NAME}"
-        MACOSX_BUNDLE_BUNDLE_VERSION "1.0"
-        MACOSX_BUNDLE_SHORT_VERSION_STRING "1.0")
+        MACOSX_BUNDLE_BUNDLE_VERSION "${FACTURX_VERSION}"
+        MACOSX_BUNDLE_SHORT_VERSION_STRING "${FACTURX_VERSION}")
 
     set_source_files_properties(${PLUGIN_RESOURCES} PROPERTIES
         MACOSX_PACKAGE_LOCATION Resources)

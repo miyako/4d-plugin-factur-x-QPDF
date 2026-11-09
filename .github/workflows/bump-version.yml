@@ -16,45 +16,47 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: bump-version-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   bump:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
+        if: github.ref_type == 'branch'
         uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
-      - name: bump VERSION
-        id: bump
+      - name: Require a branch selection
+        env:
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          set -euo pipefail
-          CURRENT=$(cat VERSION)
-          if [ -z "$CURRENT" ]; then
-            echo "Could not read VERSION file" >&2
+          if [ "$REF_TYPE" != branch ]; then
+            echo "::error::Select a branch, not a tag, to bump its version."
             exit 1
           fi
 
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          case "${{ inputs.mode }}" in
-            major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR+1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH+1)) ;;
-          esac
-          NEW="${MAJOR}.${MINOR}.${PATCH}"
-
-          echo "Bumping ${CURRENT} -> ${NEW}"
-          echo "$NEW" > VERSION
-
+      - name: bump coordinated version metadata
+        id: bump
+        env:
+          BUMP_MODE: ${{ inputs.mode }}
+          SELECTED_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/release.py check-commit
+          NEW=$(python3 .github/scripts/release.py bump "$BUMP_MODE")
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add VERSION
+          git add VERSION facturx/CMakeLists.txt facturx/Info.plist.in
           git commit -m "chore: bump version to ${NEW}"
-          git tag "v${NEW}"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-          git push origin "v${NEW}"
-
-          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
+          git -c push.followTags=false push origin "HEAD:${SELECTED_REF}"
 
       - name: summary
-        run: echo "### Bumped to v${{ steps.bump.outputs.version }} — release.yml will pick up the pushed tag." >> "$GITHUB_STEP_SUMMARY"
+        env:
+          VERSION: ${{ steps.bump.outputs.version }}
+        run: |
+          echo "### Committed version ${VERSION} to the selected branch. No tag or release created; run Build separately." >> "$GITHUB_STEP_SUMMARY"

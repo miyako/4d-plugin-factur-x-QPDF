@@ -71,8 +71,8 @@ A 4D plugin is a native dynamic library loaded by the 4D runtime at startup:
 project-root/
 ├── .github/
 │   └── workflows/
-│       ├── test.yml              # CI test workflow (tag + manual)
-│       ├── bump-version.yml      # Version bump + tag push
+│       ├── test.yml              # CI test workflow (push + PR + manual)
+│       ├── bump-version.yml      # Commit coordinated version metadata only
 │       └── release.yml           # Build, sign, notarize & release
 ├── .gitignore
 ├── 4D-Plugin-SDK/                # Git submodule
@@ -106,7 +106,9 @@ Create a `VERSION` file in the project root containing the semantic version:
 1.0.0
 ```
 
-This file is the single source of truth for the version number, used by `bump-version.yml` to tag releases.
+This file is the single source of truth for the version number. `bump-version.yml`
+commits coordinated metadata only; the separate, zero-input manual **Build**
+workflow publishes a new tag and release after all required checks succeed.
 
 ### .gitignore
 
@@ -920,15 +922,16 @@ No authentication required for download.
 
 ### `test.yml` — Build & Test (CMake)
 
-This workflow builds the plugin using CMake on both platforms and runs tests with tool4d. Triggered on tag push or manual dispatch.
+This workflow builds the plugin using CMake on both platforms and runs tests with tool4d. Triggered on branch push, pull request, or manual dispatch. The repository's actual workflow also runs lifecycle regressions and PDF/A conformance checks; preserve those when adapting this generic example.
 
 ```yaml
 name: Build and Test
 
 on:
   push:
-    tags:
-      - '*'
+    branches:
+      - '**'
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -1021,251 +1024,42 @@ jobs:
 
 ## GitHub Actions — Release Workflow
 
-### `bump-version.yml` — Version Bump & Tag
+### `bump-version.yml` — Commit version metadata only
 
-Reads/writes a `VERSION` file in the project root. On manual dispatch, bumps the version, commits, and pushes a `vX.Y.Z` tag that triggers `release.yml`.
+Use the maintained [workflow](../workflows/bump-version.yml) and shared
+[helper](../scripts/release.py), rather than duplicating a release template.
+The manual patch/minor/major action validates coordinated metadata, checks out
+the selected immutable SHA, rejects tag selections, and pushes only the selected
+branch with follow-tags disabled. Per-branch concurrency and a non-forced push
+protect concurrent edits. It creates no tag or release and starts no release build.
 
-```yaml
-name: Bump version
+### `release.yml` — Manual Build, then publish
 
-on:
-  workflow_dispatch:
-    inputs:
-      mode:
-        type: choice
-        description: Semantic version bump
-        options:
-          - patch
-          - minor
-          - major
-        default: patch
-        required: true
+Use the maintained [Build workflow](../workflows/release.yml), which has only
+`workflow_dispatch` and zero inputs. Every release job checks out `github.sha`,
+validates the authoritative version, and rejects existing remote tags/releases.
+Publication is serialized across branches; no main-only restriction is imposed.
+Use authenticated, paginated release listings to reject same-tag drafts as well
+as published releases; a tag-specific release lookup does not cover drafts.
 
-permissions:
-  contents: write
+Preserve Windows x64, static dependencies, Windows artifact checks, separate
+arm64/x86_64 builds for libjpeg-turbo, universal verification and bundle merging,
+bundle metadata validation, Developer ID signing, ZIP/DMG packaging, explicit
+notarization acceptance and DMG staple validation. Recheck availability directly
+before pushing a non-forced tag at the selected SHA and creating a new release.
+Only a successful complete listing with no matching release means absence;
+all remote/API failures (including listing 404s) and malformed responses stop
+the workflow. Never overwrite tags, releases or assets.
 
-jobs:
-  bump:
-    runs-on: ubuntu-latest
-    steps:
-      - name: checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: bump VERSION
-        id: bump
-        run: |
-          set -euo pipefail
-          CURRENT=$(cat VERSION)
-          if [ -z "$CURRENT" ]; then
-            echo "Could not read VERSION file" >&2
-            exit 1
-          fi
-
-          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          case "${{ inputs.mode }}" in
-            major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
-            minor) MINOR=$((MINOR+1)); PATCH=0 ;;
-            patch) PATCH=$((PATCH+1)) ;;
-          esac
-          NEW="${MAJOR}.${MINOR}.${PATCH}"
-
-          echo "Bumping ${CURRENT} -> ${NEW}"
-          echo "$NEW" > VERSION
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add VERSION
-          git commit -m "chore: bump version to ${NEW}"
-          git tag "v${NEW}"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-          git push origin "v${NEW}"
-
-          echo "version=${NEW}" >> "$GITHUB_OUTPUT"
-
-      - name: summary
-        run: echo "### Bumped to v${{ steps.bump.outputs.version }} — release.yml will pick up the pushed tag." >> "$GITHUB_STEP_SUMMARY"
-```
-
-### `release.yml` — Build, Sign, Notarize & Release
-
-Builds the plugin for both platforms using CMake, codesigns + notarizes the macOS binary, merges Windows + macOS into a single cross-platform `.bundle`, and publishes a GitHub Release.
-
-```yaml
-name: Build & Release
-
-on:
-  push:
-    tags:
-      - 'v*.*.*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Existing tag to build (e.g. v2.3.0)
-        required: true
-
-permissions:
-  contents: write
-
-env:
-  PRODUCT_NAME: {name}
-  MACOS_DEPLOYMENT_TARGET: '10.13'
-
-concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: false
-
-jobs:
-
-  version:
-    runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.set.outputs.tag }}
-      version: ${{ steps.set.outputs.version }}
-    steps:
-      - id: set
-        run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
-
-  build-windows:
-    name: Build Windows (x64)
-    needs: version
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.version.outputs.tag }}
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: build with CMake
-        shell: pwsh
-        run: |
-          cd ${{ env.PRODUCT_NAME }}
-          mkdir cmake-build; cd cmake-build
-          cmake .. -A x64
-          cmake --build . --config Release
-
-      - name: upload windows binaries
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-binaries
-          path: |
-            ${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX
-          if-no-files-found: error
-
-  build-macos:
-    name: Build macOS, package, sign, notarize & release
-    needs: [version, build-windows]
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ needs.version.outputs.tag }}
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: download windows binaries
-        uses: actions/download-artifact@v4
-        with:
-          name: windows-binaries
-          path: winbuild
-
-      - name: import Developer ID certificate
-        env:
-          CERT_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE }}
-          CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          KEYCHAIN_PATH="$RUNNER_TEMP/build.keychain-db"
-          CERT_PATH="$RUNNER_TEMP/certificate.p12"
-
-          echo -n "$CERT_BASE64" | base64 --decode -o "$CERT_PATH"
-
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security import "$CERT_PATH" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
-          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-
-      - name: store notarytool credentials
-        env:
-          APPLE_ID: ${{ secrets.NOTARYTOOL_APPLE_ID }}
-          TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
-          APP_PASSWORD: ${{ secrets.NOTARYTOOL_PASSWORD }}
-        run: |
-          xcrun notarytool store-credentials "notarytool-profile" \
-            --apple-id "$APPLE_ID" \
-            --team-id "$TEAM_ID" \
-            --password "$APP_PASSWORD" \
-            --keychain "$KEYCHAIN_PATH"
-
-      - name: build macOS plugin (universal)
-        run: |
-          cd ${{ env.PRODUCT_NAME }}
-          mkdir -p cmake-build && cd cmake-build
-          cmake .. -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET="${{ env.MACOS_DEPLOYMENT_TARGET }}"
-          cmake --build .
-
-      - name: verify universal binary
-        run: |
-          set -euo pipefail
-          BIN="${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}.bundle/Contents/MacOS/${{ env.PRODUCT_NAME }}"
-          lipo -info "$BIN"
-          lipo -info "$BIN" | grep -q "arm64" && lipo -info "$BIN" | grep -q "x86_64"
-
-      - name: merge Windows binaries into the bundle
-        run: |
-          set -euo pipefail
-          BUNDLE="${{ env.PRODUCT_NAME }}/${{ env.PRODUCT_NAME }}-test/Plugins/${{ env.PRODUCT_NAME }}.bundle"
-          mkdir -p "$BUNDLE/Contents/Windows64"
-          cp "winbuild/${{ env.PRODUCT_NAME }}.4DX" "$BUNDLE/Contents/Windows64/${{ env.PRODUCT_NAME }}.4DX"
-          echo "BUNDLE_PATH=$BUNDLE" >> "$GITHUB_ENV"
-
-      - name: codesign
-        run: |
-          set -euo pipefail
-          IDENTITY=$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
-            | grep "Developer ID Application" | head -1 | sed -E 's/.*"(.*)".*/\1/')
-          echo "Signing with: $IDENTITY"
-          codesign --verbose --deep --timestamp --force --options=runtime \
-            --sign "$IDENTITY" "$BUNDLE_PATH"
-
-      - name: package, notarize & staple
-        run: |
-          set -euo pipefail
-          VERSION="${{ needs.version.outputs.version }}"
-          ZIP_PATH="${{ env.PRODUCT_NAME }}-${VERSION}.zip"
-          DMG_PATH="${{ env.PRODUCT_NAME }}-${VERSION}.dmg"
-
-          ditto -c -k --keepParent "$BUNDLE_PATH" "$ZIP_PATH"
-          hdiutil create -format UDBZ -volname "${{ env.PRODUCT_NAME }}" -srcfolder "$BUNDLE_PATH" "$DMG_PATH"
-
-          xcrun notarytool submit "$ZIP_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
-          xcrun notarytool submit "$DMG_PATH" --keychain-profile "notarytool-profile" --keychain "$KEYCHAIN_PATH" --wait
-          xcrun stapler staple "$DMG_PATH"
-
-          echo "ZIP_PATH=$ZIP_PATH" >> "$GITHUB_ENV"
-          echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
-
-      - name: create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.version.outputs.tag }}
-          name: ${{ needs.version.outputs.tag }}
-          files: |
-            ${{ env.ZIP_PATH }}
-            ${{ env.DMG_PATH }}
-```
+Tag push and release creation are not atomic. A failure after tag push may leave
+a tag or partial release requiring manual inspection. Use a create-only REST
+POST with explicit tag, selected SHA, name, `draft=false`, `prerelease=false`,
+and generated notes, followed by `gh release upload` without `--clobber`.
+Do not use `gh release create` with assets, which can delete its temporary draft
+on failure. Do not automatically delete or overwrite publication state; retries
+must refuse it.
+See the [README](../../README.md#cicd) for version-source details, migration drift
+repair, and focused regression commands.
 
 ### Required GitHub Secrets for Release
 
@@ -1286,9 +1080,9 @@ The `release.yml` workflow requires the following repository secrets configured 
 
 - **`fail-fast: false`** — run both platforms independently so you see all failures
 - **CMake on Windows** — use `pwsh` shell; do NOT hardcode `-G "Visual Studio 17 2022"` — use `-A x64` alone so CMake auto-detects the installed VS version (runners update frequently)
-- **Universal binary** — pass `-DCMAKE_OSX_ARCHITECTURES="arm64;x86_64"` for release builds
+- **Universal binary** — this repository builds one architecture at a time for libjpeg-turbo, then combines them with `lipo`.
 - **Submodules** — use `submodules: recursive` and `fetch-depth: 0` in checkout action. Shallow clones (`--depth=1`) can fail to materialize files in submodule subdirectories (especially on Windows).
-- **Version management** — `bump-version.yml` reads/writes a `VERSION` file, not project files
+- **Version management** — `VERSION` is authoritative; CMake derives both bundle version fields. Bumps preserve corresponding plist references and coordinate any literals.
 - **Codesign verify** — do NOT add a `codesign --verify` step after signing. macOS 26 runners produce spurious "No such process" errors on verify even when the signature is valid. Notarization is the real gate — it rejects improperly signed code.
 
 ---
@@ -1400,9 +1194,9 @@ This project uses GitHub Actions for automated testing and releases:
 
 | Workflow | Trigger | Purpose |
 |---|---|---|
-| `test.yml` | Tag push / manual | Build & test on macOS + Windows |
-| `bump-version.yml` | Manual | Bump `VERSION`, commit, push tag |
-| `release.yml` | `v*.*.*` tag | Build, sign, notarize, GitHub Release |
+| `test.yml` | Push / PR / manual | Build & test on macOS + Windows |
+| `bump-version.yml` | Manual | Commit coordinated metadata to selected branch only |
+| `release.yml` — Build | Manual, zero inputs | Build selected SHA, verify, sign, notarize, then create new tag and release |
 
 ### Required Secrets (for `release.yml` only)
 
@@ -1769,7 +1563,7 @@ Given a plugin specification (name, commands, constants, behavior):
 
 ### 6. GitHub Actions Workflows
 - [ ] Create `.github/workflows/test.yml` (CMake build + tool4d tests)
-- [ ] Create `.github/workflows/bump-version.yml` (version bump + tag)
+- [ ] Create `.github/workflows/bump-version.yml` (commit coordinated metadata only)
 - [ ] Create `.github/workflows/release.yml` (build, sign, notarize, release)
 - [ ] Verify CI passes
 
@@ -2154,7 +1948,7 @@ Expected: `isCompliant="true"`, `failedRules="0"`.
 4. **`PA_GetUnistring`** is the correct function name, not `PA_GetUnistringPtr` (Pitfall #22)
 5. **catalog.4DCatalog** must have `base.dtd`, `name`, `uuid`, `DEFAULT_SCHEMA`, `journal_file` (Pitfall #19)
 6. **CI workflow pattern:** Windows first → macOS downloads Windows binaries → merge into bundle → sign → notarize → release
-7. **Bump-version + release:** Tags pushed by `GITHUB_TOKEN` don't trigger other workflows; push tags manually or use a PAT
+7. **Bump-version + release:** Keep them separate manual actions; Build creates the new tag only after all required verification succeeds. Do not rely on token-pushed tags to trigger workflows.
 8. **veraPDF** is the industry-standard open-source PDF/A validator — use it to verify output compliance
 
 ### 23. Writing output strings via pointer parameters (`&Z`)
@@ -2210,8 +2004,8 @@ All plugin projects use the same GitHub Actions repository secrets for macOS cod
 | `NOTARYTOOL_TEAM_ID` | 10-character Apple Developer Team ID |
 
 **Workflow structure:** Two separate workflows:
-- `build.yml` — compile + verify on every push/PR. No signing, no artifacts.
-- `release.yml` — build both platforms + codesign + notarize + GitHub Release. Triggers on `v*.*.*` tags or manual `workflow_dispatch`.
+- `test.yml` — compile, test, and verify on every branch push/PR. No signing or publication.
+- `release.yml` — displayed as **Build**, manual `workflow_dispatch` only with zero inputs; build the selected SHA on both platforms, codesign, notarize, then create a new tag and GitHub Release.
 
 **Certificate import pattern** (proven across all plugin projects):
 ```yaml
@@ -2230,7 +2024,7 @@ security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN
 
 **Verification:** Do NOT use `codesign --verify --deep --strict` on bundles containing third-party dylibs (e.g., Oracle, OpenSSL) or Windows binaries (`.4DX`, `.dll`). The verify traverses the full bundle tree and fails with "No such process" on non-standard structures — even when the signing itself succeeded. Notarytool validates the signature during submission, so a separate verify step is unnecessary.
 
-**Release artifacts:** Create both `.zip` (cross-platform bundle) and `.dmg` (mac-friendly, can be stapled). Notarize both, staple the dmg. Publish with `softprops/action-gh-release@v2`.
+**Release artifacts:** Create both `.zip` (cross-platform bundle) and `.dmg` (mac-friendly, can be stapled). Require Accepted notarization for both and staple validation for the dmg. Recheck unused version including draft releases, push a non-forced tag at the selected SHA, verify its remote target, then use a create-only REST POST for a published non-prerelease with generated notes. Upload with `gh release upload` without `--clobber`. Never update or automatically delete existing releases or assets.
 
 **Ad-hoc vs Developer ID:** Ad-hoc signatures (`codesign -fs -`) are only for local development builds. CI release builds must use Developer ID for notarization to succeed.
 
