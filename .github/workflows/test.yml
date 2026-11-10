@@ -96,6 +96,11 @@ jobs:
           done
           otool -L "$bin"
 
+      - name: Native ownership regression (macOS, ASan/UBSan)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: bash tests/run_native_ownership.sh "$PWD" "$RUNNER_TEMP/native-ownership"
+
       - name: Build the PDF/A-3 conformance fixture (macOS)
         if: runner.os == 'macOS'
         shell: bash

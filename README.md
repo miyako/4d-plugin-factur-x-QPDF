@@ -246,6 +246,11 @@ plugin.
 
 ## CI/CD
 
+Native getter failures are reported as error 401 with property/index context
+and the native 4D error, before any failed output is inspected or cleared.
+For the bounded native string-ownership audit and the standalone macOS
+ASan/UBSan engine-boundary regression, see [tests/README.md](tests/README.md).
+
 | Workflow | Trigger | Purpose |
 |---|---|---|
 | `test.yml` — Build and Test | Push / PR / manual | Workflow regressions, macOS + Windows builds and 4D tests, veraPDF validation |

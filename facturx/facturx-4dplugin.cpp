@@ -246,8 +246,12 @@ object_property(PA_ObjectRef obj, char const* key)
 {
     UStr k(key);
     PA_Variable v = PA_GetObjectProperty(obj, k.get());
-    if (PA_GetLastError() != eER_NoErr) {
-        std::memset(&v, 0, sizeof(v));
+    PA_ErrorCode error = PA_GetLastError();
+    if (error != eER_NoErr) {
+        fail(
+            FX_BACKEND_ERROR,
+            std::string("could not read object property ") + key +
+                " (4D error " + std::to_string(error) + ")");
     }
     return v;
 }
@@ -908,7 +912,14 @@ parse_attachments(PA_CollectionRef col, XmlInfo const& xi)
 
     for (PA_long32 i = 0; i < count; ++i) {
         std::string ctx = "attachments[" + std::to_string(i) + "]";
-        PAVar v(PA_GetCollectionElement(col, i));
+        PA_Variable element = PA_GetCollectionElement(col, i);
+        PA_ErrorCode error = PA_GetLastError();
+        if (error != eER_NoErr) {
+            fail(
+                FX_BACKEND_ERROR,
+                "could not read " + ctx + " (4D error " + std::to_string(error) + ")");
+        }
+        PAVar v(element);
         if (v.kind() != eVK_Object) {
             fail(FX_ATTACHMENT_NOT_OBJECT, ctx + " must be an Object");
         }
